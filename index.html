@@ -21,8 +21,10 @@
             display:flex; align-items:center; justify-content:space-between; gap:12px;
         }
         #gridPanel summary::-webkit-details-marker { display:none; }
-        .chev { transition:transform .2s ease; }
-        #gridPanel[open] .chev { transform:rotate(180deg); }
+        /* .chev { transition:transform .2s ease; }
+        #gridPanel[open] .chev { transform:rotate(180deg); } */
+        .chev { transition: transform .2s ease; display:inline-block; }
+        #gridPanel[open] .chev { transform: rotate(90deg); }
         #gridPanel[open] summary { border-bottom:1px solid #374151; }
         .panel-body { padding:10px 12px; }
         .table-wrap { max-height:300px; overflow:auto; border-radius:6px; border:1px solid #374151; }
@@ -62,10 +64,10 @@
         <canvas id="gl"></canvas>
 
         <!-- Painel colapsável com grid -->
-        <details id="gridPanel" open>
+        <details id="gridPanel">
             <summary>
                 <div style="display:flex; align-items:center; gap:10px;">
-                    <span class="chev">▾</span>
+                    <span class="chev">▸</span>
                     <span id="gridTitle">Contêineres</span>
                 </div>
                 <div style="opacity:.8; font-size:12px;" id="gridMeta">0 itens</div>
