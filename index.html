@@ -9,7 +9,7 @@
         html, body { height:100%; margin:0; background:#0e1116; color:#e5e7eb; font-family:system-ui, Segoe UI, Roboto, Arial; }
         #app { position:relative; height:100%; }
         canvas { display:block; width:100%; height:100%; }
-
+        
         /* Painel do grid (colapsável no topo) */
         #gridPanel {
             position:absolute; top:12px; left:12px; right:12px;
@@ -36,7 +36,7 @@
         tbody td { padding:8px 10px; border-bottom:1px solid #374151; }
         tbody tr:hover { background:#111827; }
         .sw { width:12px; height:12px; border-radius:3px; border:1px solid #374151; display:inline-block; vertical-align:middle; margin-right:6px; }
-
+        
         #tooltip {
             position:absolute; pointer-events:none; padding:6px 8px; background:#111827cc; color:#f9fafb; 
             border:1px solid #374151; border-radius:6px; font-size:12px; transform:translate(-50%, -120%); display:none; white-space:nowrap;
@@ -46,7 +46,7 @@
         }
         .row { display:flex; gap:8px; align-items:center; margin-top:6px; }
         .swatch { width:14px; height:14px; border-radius:3px; border:1px solid #374151; }
-
+        
         #hud {
             position:absolute; bottom:12px; left:12px; background:#111827dd; padding:8px 10px; border:1px solid #374151; border-radius:8px; font-size:12px; z-index:10;
         }
@@ -62,7 +62,7 @@
 <body>
     <div id="app">
         <canvas id="gl"></canvas>
-
+        
         <!-- Painel colapsável com grid -->
         <details id="gridPanel">
             <summary>
@@ -80,7 +80,7 @@
                                 <th>Container</th>
                                 <th>Bay</th>
                                 <th>Row</th>
-                                <th>Stack</th>
+                                <th>Tier</th>
                                 <th>Entrada</th>
                                 <th>Saída</th>
                                 <th>Status</th>
@@ -91,27 +91,28 @@
                 </div>
             </div>
         </details>
-
+        
         <div id="tooltip"></div>
-
+        
         <div id="legend">
-            <div><strong>Pátio 3D</strong> — bays × rows × stacks</div>
-            <div style="margin-top:6px">Bays: 4, Rows: 4, Stacks: 3</div>
+            <div><strong>Pátio 3D</strong> — bays × rows × tiers</div>
+            <div style="margin-top:6px">Bays: 4, Rows: 4, Tiers: 3</div>
             <div class="row"><div class="swatch" style="background:#60a5fa"></div><div>Saída hoje</div></div>
             <div class="row"><div class="swatch" style="background:#34d399"></div><div>≤ 2 dias</div></div>
             <div class="row"><div class="swatch" style="background:#f59e0b"></div><div>≤ 4 dias</div></div>
             <div class="row"><div class="swatch" style="background:#9ca3af"></div><div>Mais longe</div></div>
         </div>
-
+        
         <div id="actions">
             <button id="btnOpt">Reorganizar (saída)</button>
             <button id="btnOrig">Restaurar original</button>
         </div>
-
+        
         <div id="hud">
             Arraste: orbitar • Shift+arraste: pan • Scroll: zoom
         </div>
     </div>
+    <script src="add-container-plugin.js"></script>
     <script>
         (async () => {
             // Estado de dados (original e corrente)
@@ -139,7 +140,7 @@
                 if (d <= 4) return '≤ 4 dias';
                 return 'Mais longe';
             }
-
+            
             // Otimização simples
             function optimizeLayout(p, { flipRowAxis = true } = {}){
                 const { bays, rows, stacks, data } = p;
@@ -176,7 +177,7 @@
                 out.sort((a,b)=> a.bay-b.bay || a.row-b.row || a.stack-b.stack);
                 return { bays, rows, stacks, data: out };
             }
-
+            
             // WebGL básico
             const canvas = document.getElementById('gl');
             const gl = canvas.getContext('webgl', {antialias:true, alpha:false});
@@ -290,12 +291,12 @@
             // Layout e instâncias
             const BAY = patio.bays, ROW = patio.rows, STACK = patio.stacks;
             const cellW = 3.0, cellL = 6.0, cellH = 2.5, gap = 0.3;
-
+            
             // Centraliza o pivô
             const centerX = ((ROW - 1) * (cellW + gap)) / 2;
             const centerZ = ((BAY - 1) * (cellL + gap)) / 2;
             target[0] = centerX; target[2] = centerZ;
-
+            
             let instances = [];
             function rebuildInstances(){
                 instances = [];
@@ -321,12 +322,12 @@
                     }
                 }
             }
-
+            
             // Grid (tabela)
             const gridBody = document.getElementById('gridBody');
             const gridMeta = document.getElementById('gridMeta');
             const gridPanel = document.getElementById('gridPanel');
-
+            
             function updatePanelOffset(){
                 const open = gridPanel.hasAttribute('open');
                 const h = open ? gridPanel.getBoundingClientRect().height : gridPanel.querySelector('summary').getBoundingClientRect().height;
@@ -334,7 +335,7 @@
             }
             gridPanel.addEventListener('toggle', updatePanelOffset);
             window.addEventListener('resize', updatePanelOffset);
-
+            
             function rebuildGrid(){
                 // Ordena por bay, row, stack
                 const rows = [...patio.data].sort((a,b)=> a.bay-b.bay || a.row-b.row || a.stack-b.stack);
@@ -357,10 +358,10 @@
                 gridMeta.textContent = `${rows.length} itens`;
                 updatePanelOffset();
             }
-
+            
             rebuildInstances();
             rebuildGrid();
-
+            
             // Buffers de cor
             const colorArr = new Float32Array(cube.verts*3);
             gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
@@ -458,20 +459,136 @@
             requestAnimationFrame(drawScene);
             
             // Botões: otimizar e restaurar
+            // document.getElementById('btnOpt').addEventListener('click', () => {
+            //     patio = optimizeLayout(originalPatio);
+            //     rebuildInstances();
+            //     rebuildGrid();
+            // });
+            // document.getElementById('btnOrig').addEventListener('click', () => {
+            //     patio = JSON.parse(JSON.stringify(originalPatio));
+            //     rebuildInstances();
+            //     rebuildGrid();
+            // });
+            
+            // // Reorganizar a partir do estado atual (mantém os adicionados)
+            // document.getElementById('btnOpt').addEventListener('click', () => {
+            //     patio = optimizeLayout(patio);
+            //     rebuildInstances();
+            //     if (typeof rebuildGrid === 'function') rebuildGrid();
+            // });
+            
+            // Substitua sua função por esta variante que também retorna moves (log)
+            function optimizeLayoutWithMoves(p, { flipRowAxis = true } = {}){
+                const { bays, rows, stacks, data } = p;
+                
+                // 1) Calcula layout alvo (mesma lógica atual)
+                const asc = [...data].sort((a,b)=> a.saida.localeCompare(b.saida));
+                const out = [];
+                let end = asc.length;
+                for (let r = rows; r >= 1 && end > 0; r--) {
+                    const rowCap = bays * stacks;
+                    const take = Math.min(rowCap, end);
+                    const start = end - take;
+                    const rowItems = asc.slice(start, end).sort((a,b)=> a.saida.localeCompare(b.saida));
+                    end = start;
+                    
+                    const perBay = Array.from({length: bays}, () => []);
+                    let k = 0;
+                    for (let layer = stacks; layer >= 1 && k < rowItems.length; layer--) {
+                        for (let b = 0; b < bays && k < rowItems.length; b++) {
+                            perBay[b].push(rowItems[k++]); // topo primeiro
+                        }
+                    }
+                    
+                    for (let b = 0; b < bays; b++) {
+                        const pile = perBay[b];
+                        const n = pile.length;
+                        for (let j = 0; j < n; j++) {
+                            const c = pile[j];
+                            const stack = n - j; // j=0 -> topo
+                            const rowOut = flipRowAxis ? (rows - r + 1) : r;
+                            out.push({
+                                bay: b+1, row: rowOut, stack,
+                                container: c.container, entrada: c.entrada, saida: c.saida
+                            });
+                        }
+                    }
+                }
+                out.sort((a,b)=> a.bay-b.bay || a.row-b.row || a.stack-b.stack);
+                
+                // 2) Gera log de movimentações (simplificado e legível)
+                // Regra: se posição mudou, loga "→" tirando da posição atual e "←" colocando na posição alvo.
+                const curById = new Map();
+                for (const c of data) curById.set(c.container, { bay:c.bay, row:c.row, stack:c.stack });
+                const tgtById = new Map();
+                for (const c of out)  tgtById.set(c.container, { bay:c.bay, row:c.row, stack:c.stack });
+                
+                const moves = [];
+                // Remoções (→) de quem vai mudar
+                for (const c of data) {
+                    const tgt = tgtById.get(c.container);
+                    if (!tgt) continue;
+                    if (tgt.bay!==c.bay || tgt.row!==c.row || tgt.stack!==c.stack) {
+                        moves.push(`${c.container} → Bay ${c.bay} Row ${c.row} (Stack ${c.stack})`);
+                    }
+                }
+                // Colocações (←) em ordem de destino
+                for (const c of out) {
+                    const cur = curById.get(c.container);
+                    if (!cur) { // novo que não existia (defensivo)
+                        moves.push(`${c.container} ← Bay ${c.bay} Row ${c.row} (Stack ${c.stack})`);
+                        continue;
+                    }
+                    if (cur.bay!==c.bay || cur.row!==c.row || cur.stack!==c.stack) {
+                        moves.push(`${c.container} ← Bay ${c.bay} Row ${c.row} (Stack ${c.stack})`);
+                    }
+                }
+                
+                return { bays, rows, stacks, data: out, moves };
+            }
+            
+            // Exemplo de uso no botão "Reorganizar (saída)"
             document.getElementById('btnOpt').addEventListener('click', () => {
-                patio = optimizeLayout(originalPatio);
+                const res = optimizeLayoutWithMoves(patio);
+                patio = { bays:res.bays, rows:res.rows, stacks:res.stacks, data:res.data };
                 rebuildInstances();
-                rebuildGrid();
+                if (typeof rebuildGrid === 'function') rebuildGrid();
+                
+                // Integra com o painel do plugin (se existir)
+                const list = document.getElementById('acp-moves-list');
+                const count = document.getElementById('acp-moves-count');
+                const panel = document.getElementById('acp-moves');
+                if (list && count && panel) {
+                    list.innerHTML = '';
+                    res.moves.forEach(line => {
+                        const li = document.createElement('li');
+                        li.textContent = line;
+                        list.appendChild(li);
+                    });
+                    count.textContent = `${res.moves.length} mov.`;
+                    panel.hidden = false;
+                }
             });
+            
+            // Restaurar do original (mantém a função de reset)
             document.getElementById('btnOrig').addEventListener('click', () => {
                 patio = JSON.parse(JSON.stringify(originalPatio));
                 rebuildInstances();
-                rebuildGrid();
+                if (typeof rebuildGrid === 'function') rebuildGrid();
             });
-
+            
             // Inicializa offset do painel
             updatePanelOffset();
+            
+            window.integratePatioApi({
+                getPatio(){ return patio; },
+                setPatio(p){ patio = p; },
+                rebuildInstances,
+                rebuildGrid
+            });
         })();
+        
+        
     </script>
 </body>
 </html>
