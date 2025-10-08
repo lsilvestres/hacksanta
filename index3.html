@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <title>Pátio 3D rótulos corretos</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { height:100%; margin:0; background:#0e1116; color:#e5e7eb; font-family:system-ui, Segoe UI, Roboto, Arial; }
+    #app { position:relative; height:100%; }
+    canvas { display:block; width:100%; height:100%; }
+    #tooltip {
+      position:absolute; pointer-events:none; padding:6px 8px; background:#111827cc; color:#f9fafb;
+      border:1px solid #374151; border-radius:6px; font-size:12px; transform:translate(-50%, -120%); display:none; white-space:nowrap;
+    }
+    #legend {
+      position:absolute; top:12px; left:12px; background:#111827dd; padding:10px 12px; border:1px solid #374151; border-radius:8px; font-size:12px;
+    }
+    .row { display:flex; gap:8px; align-items:center; margin-top:6px; }
+    .swatch { width:14px; height:14px; border-radius:3px; border:1px solid #374151; }
+    #actions {
+      position:absolute; top:12px; right:12px; background:#111827dd; padding:10px 12px; border:1px solid #374151; border-radius:8px; display:flex; gap:8px;
+    }
+    button {
+      background:#1f2937; color:#e5e7eb; border:1px solid #374151; padding:6px 10px; border-radius:6px; cursor:pointer;
+    }
+    button:hover { background:#111827; }
+    #hud { position:absolute; bottom:12px; left:12px; background:#111827dd; padding:8px 10px; border:1px solid #374151; border-radius:8px; font-size:12px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+  <div id="tooltip"></div>
+  <div id="legend">
+    <div><strong>Pátio 3D</strong> — bays × rows × stacks</div>
+    <div style="margin-top:6px">Bays: 4, Rows: 4, Stacks: 3</div>
+    <div class="row"><div class="swatch" style="background:#60a5fa"></div><div>Saída hoje</div></div>
+    <div class="row"><div class="swatch" style="background:#34d399"></div><div>≤ 2 dias</div></div>
+    <div class="row"><div class="swatch" style="background:#f59e0b"></div><div>≤ 4 dias</div></div>
+    <div class="row"><div class="swatch" style="background:#9ca3af"></div><div>Mais longe</div></div>
+  </div>
+  <div id="actions">
+    <button id="btnOpt">Reorganizar (saída)</button>
+    <button id="btnOrig">Restaurar original</button>
+  </div>
+  <div id="hud">Arraste: orbitar • Shift+arraste: pan • Scroll: zoom</div>
+</div>
+
+<script>
+(async () => {
+  const originalPatio = await fetch('data/load-patio.json').then(r => r.json()); // [attached_file:1]
+  let patio = JSON.parse(JSON.stringify(originalPatio)); // [attached_file:1]
+
+  // WebGL
+  const canvas = document.getElementById('gl');
+  const gl = canvas.getContext('webgl', {antialias:true, alpha:false});
+  if(!gl){ alert('WebGL não suportado'); return; } // [attached_file:1]
+  function resize(){
+    const dpr = Math.min(window.devicePixelRatio||1, 2);
+    const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+    const h = canvas.clientHeight || canvas.parentElement.clientHeight;
+    canvas.width = Math.floor(w*dpr); canvas.height = Math.floor(h*dpr);
+    gl.viewport(0,0,canvas.width,canvas.height);
+  }
+  window.addEventListener('resize', resize); resize(); // [attached_file:1]
+
+  // Math
+  function mat4Identity(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
+  function mat4Multiply(a,b){ const o=new Float32Array(16);
+    for(let r=0;r<4;r++) for(let c=0;c<4;c++) o[r*4+c]=a[r*4+0]*b[0*4+c]+a[r*4+1]*b[1*4+c]+a[r*4+2]*b[2*4+c]+a[r*4+3]*b[3*4+c];
+    return o; }
+  function mat4Perspective(fovy, aspect, near, far){
+    const f=1/Math.tan(fovy/2), nf=1/(near-far); const out=new Float32Array(16);
+    out[0]=f/aspect; out[5]=f; out[10]=(far+near)*nf; out[11]=-1; out[14]=(2*far*near)*nf; return out; }
+  function mat4Translate(m, v){ const [x,y,z]=v; const t=mat4Identity(); t[12]=x; t[13]=y; t[14]=z; return mat4Multiply(m,t); }
+  function mat4RotateY(m,a){ const c=Math.cos(a), s=Math.sin(a); const r=new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]); return mat4Multiply(m,r); }
+  function mat4LookAt(eye,center,up){
+    const [ex,ey,ez]=eye,[cx,cy,cz]=center,[ux,uy,uz]=up;
+    let zx=ex-cx, zy=ey-cy, zz=ez-cz; const zlen=Math.hypot(zx,zy,zz); zx/=zlen; zy/=zlen; zz/=zlen;
+    let xx=uy*zz-uz*zy, xy=uz*zx-ux*zz, xz=ux*zy-uy*zx; const xlen=Math.hypot(xx,xy,xz); xx/=xlen; xy/=xlen; xz/=xlen;
+    const yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
+    const out=new Float32Array(16);
+    out[0]=xx; out[1]=yx; out[2]=zx; out[4]=xy; out[5]=yy; out[6]=zy; out[8]=xz; out[9]=yz; out[10]=zz;
+    out[12]=-(xx*ex+xy*ey+xz*ez); out[13]=-(yx*ex+yy*ey+yz*ez); out[14]=-(zx*ex+zy*ey+zz*ez); out[15]=1; return out;
+  }
+
+  // Shaders
+  const vsSrc = `
+    attribute vec3 aPos; attribute vec3 aNormal; attribute vec3 aColor; attribute vec2 aUV;
+    uniform mat4 uProj, uView, uModel;
+    varying vec3 vNormal; varying vec3 vColor; varying vec2 vUV;
+    void main(){
+      vec4 world = uModel * vec4(aPos,1.0);
+      vNormal = mat3(uModel) * aNormal;
+      vColor = aColor;
+      vUV = aUV;
+      gl_Position = uProj * uView * world;
+    }`;
+  const fsSrc = `
+    precision mediump float;
+    varying vec3 vNormal; varying vec3 vColor; varying vec2 vUV;
+    uniform vec3 uLightDir;
+    uniform sampler2D uTex;
+    void main(){
+      vec3 n = normalize(vNormal);
+      float diff = max(dot(n, normalize(-uLightDir)), 0.0);
+      vec3 base = vColor*(0.35+0.65*diff);
+      vec4 tex = texture2D(uTex, vUV);
+      gl_FragColor = vec4(base,1.0)*vec4(tex.rgb, 1.0);
+    }`;
+  function compile(t,src){ const s=gl.createShader(t); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+  function link(vs,fs){ const p=gl.createProgram(); gl.attachShader(p,compile(gl.VERTEX_SHADER,vs));
+    gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(p);
+    if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; }
+  const prog = link(vsSrc, fsSrc); gl.useProgram(prog); // [attached_file:1]
+
+  // Locs
+  const aPos=gl.getAttribLocation(prog,'aPos');
+  const aNormal=gl.getAttribLocation(prog,'aNormal');
+  const aColor=gl.getAttribLocation(prog,'aColor');
+  const aUV=gl.getAttribLocation(prog,'aUV');
+  const uProj=gl.getUniformLocation(prog,'uProj');
+  const uView=gl.getUniformLocation(prog,'uView');
+  const uModel=gl.getUniformLocation(prog,'uModel');
+  const uLightDir=gl.getUniformLocation(prog,'uLightDir');
+  const uTex=gl.getUniformLocation(prog,'uTex'); // [attached_file:1]
+
+  // Quads por face (cada face é um retângulo com sua própria matriz local)
+  const quadPos = new Float32Array([
+    -0.5,-0.5,0,  0.5,-0.5,0,  0.5,0.5,0,
+    -0.5,-0.5,0,  0.5,0.5,0, -0.5,0.5,0
+  ]);
+  const quadUV = new Float32Array([ 0,0, 0,1, 1,1,  0,0, 1,1, 1,0 ]);
+  const quadNorm = new Float32Array([ 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,0,1 ]);
+  function makeVBO(data, loc, size){
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    return buf;
+  }
+  const posBuf = makeVBO(quadPos, aPos, 3);
+  const uvBuf  = makeVBO(quadUV, aUV, 2);
+  const nrmBuf = makeVBO(quadNorm, aNormal, 3);
+  const colorBuf = gl.createBuffer();
+  const colorArr = new Float32Array(6*3);
+
+  // Câmera
+  let yaw=-0.8, pitch=-0.35, dist=28, target=[6,2,0];
+  let panX=0, panY=0; let isDragging=false, lastX=0, lastY=0, isPanning=false;
+  canvas.addEventListener('mousedown', e=>{ isDragging=true; isPanning=e.shiftKey; lastX=e.clientX; lastY=e.clientY; });
+  window.addEventListener('mouseup', ()=> isDragging=false);
+  window.addEventListener('mousemove', e=>{
+    if(!isDragging) return;
+    const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+    if(isPanning){ const panSpeed=0.01*dist; panX-=dx*panSpeed; panY+=dy*panSpeed; }
+    else { yaw -= dx*0.005; pitch -= dy*0.005; pitch=Math.max(-1.4, Math.min(1.4, pitch)); }
+  });
+  canvas.addEventListener('wheel', e=>{ dist *= (1+Math.sign(e.deltaY)*0.1); dist=Math.max(5, Math.min(80, dist)); }, {passive:true});
+
+  // Cores por saída
+  const today = new Date().toISOString().slice(0,10); // [attached_file:1]
+  function daysUntil(dateStr){ const d=new Date(dateStr), t=new Date(today); return Math.round((d-t)/(1000*60*60*24)); } // [attached_file:1]
+  function colorForSaida(saida){
+    const d=daysUntil(saida);
+    if(d===0) return [0.38,0.65,0.98];
+    if(d<=2) return [0.20,0.83,0.60];
+    if(d<=4) return [0.96,0.62,0.05];
+    return [0.62,0.64,0.67];
+  } // [attached_file:1]
+
+  // Texturas por face sem inverter
+  function makeLabelCanvas(meta){
+    const c=document.createElement('canvas'); c.width=512; c.height=256;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='#0b1220'; ctx.fillRect(0,0,c.width,c.height);
+    ctx.strokeStyle='#3b82f6'; ctx.lineWidth=4; ctx.strokeRect(6,6,c.width-12,c.height-12);
+    ctx.fillStyle='#f3f4f6'; ctx.font='bold 48px system-ui, Segoe UI, Roboto, Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(meta.container, c.width/2, c.height/2-40);
+    ctx.font='bold 40px system-ui, Segoe UI, Roboto, Arial'; ctx.fillStyle='#93c5fd';
+    ctx.fillText(`SAÍDA: ${meta.saida}`, c.width/2, c.height/2+28);
+    return c;
+  }
+  function texFromCanvas(cnv){
+    const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,cnv);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.generateMipmap(gl.TEXTURE_2D); return t;
+  }
+  function transformCanvas(base, transform){
+    const c=document.createElement('canvas'); c.width=512; c.height=256;
+    const ctx=c.getContext('2d'); ctx.save(); transform(ctx,c); ctx.restore(); return c;
+  }
+  function makeFaceTextures(meta){
+    const base = makeLabelCanvas(meta);
+    const front = texFromCanvas(base);
+    const back  = texFromCanvas(transformCanvas(base,(ctx,c)=>{ ctx.translate(c.width,c.height); ctx.rotate(Math.PI); ctx.drawImage(base,0,0); }));
+    const left  = texFromCanvas(transformCanvas(base,(ctx,c)=>{ ctx.translate(0,c.height); ctx.rotate(-Math.PI/2); ctx.drawImage(base,0,0); }));
+    const right = texFromCanvas(transformCanvas(base,(ctx,c)=>{ ctx.translate(c.width,0); ctx.rotate(Math.PI/2); ctx.drawImage(base,0,0); }));
+    const top   = texFromCanvas(base);
+    const bottom= texFromCanvas(transformCanvas(base,(ctx,c)=>{ ctx.translate(0,c.height); ctx.scale(1,-1); ctx.drawImage(base,0,0); }));
+    return {front,back,left,right,top,bottom};
+  }
+
+  // Layout/otimização
+  function optimizeLayout(p){
+    const { bays, rows, stacks, data } = p;
+    const sorted=[...data].sort((a,b)=> a.saida.localeCompare(b.saida));
+    const cells=[]; for(let b=1;b<=bays;b++) for(let r=1;r<=rows;r++) cells.push({b,r,items:[]});
+    let i=0; outer: while(i<sorted.length){ for(const cell of cells){ if(i>=sorted.length) break outer; if(cell.items.length<stacks) cell.items.push(sorted[i++]); } }
+    const out=[]; for(const cell of cells){ const n=cell.items.length; for(let idx=0; idx<n; idx++){ const src=cell.items[idx]; const stack=n-idx;
+      out.push({ bay:cell.b, row:cell.r, stack, container:src.container, entrada:src.entrada, saida:src.saida }); } }
+    out.sort((a,b)=> a.bay-b.bay || a.row-b.row || a.stack-b.stack);
+    return { bays, rows, stacks, data: out };
+  }
+
+  // Instâncias: cada container vira 6 faces (quads) posicionadas
+  const BAY=patio.bays, ROW=patio.rows, STACK=patio.stacks;
+  const cellW=3.0, cellL=6.0, cellH=2.5, gap=0.3;
+  let faces=[];
+  function rebuildFaces(){
+    faces=[];
+    const byKey=new Map();
+    for(const c of patio.data) byKey.set(`${c.bay}-${c.row}-${c.stack}`, c); // [attached_file:1]
+    for(let b=1;b<=BAY;b++){
+      for(let r=1;r<=ROW;r++){
+        const x=(r-1)*(cellW+gap), z=(b-1)*(cellL+gap);
+        // Piso como quad grande (usando textura branca)
+        faces.push({ kind:'floor', pos:[x,-0.51,z], scale:[cellW,0.02,cellL], rotY:0, normal:[0,1,0], tex:null, color:[0.17,0.20,0.25] });
+        for(let s=1;s<=STACK;s++){
+          const c=byKey.get(`${b}-${r}-${s}`);
+          if(!c) continue;
+          const y=(s-1)*(cellH+0.05)+cellH/2;
+          const col=colorForSaida(c.saida);
+          const tex=makeFaceTextures(c);
+          // Cada face: definimos um quad e orientamos via rot/trans
+          // Front (z+)
+          faces.push({kind:'face', pos:[x, y, z+cellL/2*0.95], scale:[cellW*0.95, cellH*0.95, 1], rotY:0, tex:tex.front, color:col});
+          // Back (z-)
+          faces.push({kind:'face', pos:[x, y, z-cellL/2*0.95], scale:[cellW*0.95, cellH*0.95, 1], rotY:Math.PI, tex:tex.back, color:col});
+          // Left (x-)
+          faces.push({kind:'face', pos:[x-cellW/2*0.95, y, z], scale:[cellL*0.95, cellH*0.95, 1], rotY:-Math.PI/2, tex:tex.left, color:col});
+          // Right (x+)
+          faces.push({kind:'face', pos:[x+cellW/2*0.95, y, z], scale:[cellL*0.95, cellH*0.95, 1], rotY:Math.PI/2, tex:tex.right, color:col});
+          // Top (y+): usamos quad orientado para cima via rotação em Y e elevamos em Y
+          faces.push({kind:'faceTop', pos:[x, y+cellH/2*0.95, z], scale:[cellW*0.95, cellL*0.95, 1], rotY:0, tex:tex.top, color:col});
+          // Bottom (y-)
+          faces.push({kind:'faceTop', pos:[x, y-cellH/2*0.95, z], scale:[cellW*0.95, cellL*0.95, 1], rotY:Math.PI, tex:tex.bottom, color:col});
+        }
+      }
+    }
+  }
+  rebuildFaces(); // [attached_file:1]
+
+  // Tooltip simples (centro de front face)
+  const tooltip=document.getElementById('tooltip');
+  let currentMouse=null;
+  canvas.addEventListener('mousemove', e=>{
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    currentMouse = { x:(e.clientX-rect.left)*dpr, y:(e.clientY-rect.top)*dpr };
+  });
+  canvas.addEventListener('mouseleave', ()=> currentMouse=null);
+
+  // Draw
+  gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, colorArr, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(aColor);
+  gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
+
+  function multiplyMat4Vec4(m,v){ const o=new Float32Array(4);
+    for(let r=0;r<4;r++) o[r]=m[r*4+0]*v[0]+m[r*4+1]*v[1]+m[r*4+2]*v[2]+m[r*4+3]*v[3]; return o; }
+  function worldToClip(pos, view, proj){ const v=new Float32Array([pos[0],pos[1],pos[2],1]); return multiplyMat4Vec4(proj, multiplyMat4Vec4(view, v)); }
+
+  function modelFromFace(f){
+    let m=mat4Identity();
+    // Scale quad in XY
+    m[0]*=f.scale[0]; m[5]*=f.scale[1]; m[10]*=1;
+    // Orient "faceTop" deita o quad para XZ (como tampo)
+    if(f.kind==='faceTop'){
+      // rotateX(-90°) para que o quad fique no plano XZ
+      const c=Math.cos(-Math.PI/2), s=Math.sin(-Math.PI/2);
+      const rx=new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]);
+      m=mat4Multiply(m, rx);
+      // Agora scale no XZ usando scale[0] em X e scale[1] em Z
+      m[0]*=1; m[10]*=f.scale[1]/f.scale[0];
+    }
+    // Rotação Y para laterais
+    if(f.rotY){ m=mat4RotateY(m,f.rotY); }
+    // Translate
+    m=mat4Translate(m, f.pos);
+    return m;
+  }
+
+  function draw(){
+    gl.enable(gl.DEPTH_TEST);
+    gl.clearColor(0.06,0.07,0.09,1);
+    gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+
+    const aspect=canvas.width/canvas.height;
+    const proj=mat4Perspective(Math.PI/4, aspect, 0.1, 1000);
+    const cx=target[0]+panX, cy=target[1]+panY, cz=target[2];
+    const ex=cx + dist*Math.cos(pitch)*Math.cos(yaw);
+    const ey=cy + dist*Math.sin(pitch);
+    const ez=cz + dist*Math.cos(pitch)*Math.sin(yaw);
+    const view=mat4LookAt([ex,ey,ez],[cx,cy,cz],[0,1,0]);
+
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(uProj,false,proj);
+    gl.uniformMatrix4fv(uView,false,view);
+    gl.uniform3f(uLightDir,-0.6,1.0,0.7);
+
+    let hovered=null, hoveredScreen=null;
+
+    for(const f of faces){
+      const model = modelFromFace(f);
+      gl.uniformMatrix4fv(uModel,false,model);
+
+      // cor multiplicativa
+      for(let i=0;i<6;i++){ colorArr[i*3+0]=f.color[0]; colorArr[i*3+1]=f.color[1]; colorArr[i*3+2]=f.color[2]; }
+      gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, colorArr);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.vertexAttribPointer(aPos,3,gl.FLOAT,false,0,0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);  gl.vertexAttribPointer(aUV,2,gl.FLOAT,false,0,0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf); gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,0,0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      if(f.tex){ gl.bindTexture(gl.TEXTURE_2D, f.tex); }
+      else {
+        if(!window.__blankTex){
+          const c=document.createElement('canvas'); c.width=2;c.height=2; const ctx=c.getContext('2d'); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,2,2);
+          const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+          gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,c);
+          gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+          window.__blankTex=t;
+        }
+        gl.bindTexture(gl.TEXTURE_2D, window.__blankTex);
+      }
+      gl.uniform1i(uTex,0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      if(currentMouse && f.tex){
+        const clip=worldToClip(f.pos,view,proj);
+        const ndcX=clip[0]/clip[3], ndcY=clip[1]/clip[3];
+        const sx=(ndcX*0.5+0.5)*canvas.width, sy=(1-(ndcY*0.5+0.5))*canvas.height;
+        const dx=sx-currentMouse.x, dy=sy-currentMouse.y;
+        if(Math.abs(dx)<30 && Math.abs(dy)<30){ hovered=f; hoveredScreen={x:sx,y:sy}; }
+      }
+    }
+
+    if(hovered){
+      const dpr=window.devicePixelRatio||1;
+      tooltip.style.display='block';
+      tooltip.style.left=(hoveredScreen.x/dpr)+'px';
+      tooltip.style.top =(hoveredScreen.y/dpr)+'px';
+      // Não temos meta aqui, mas poderíamos anexar se necessário
+      tooltip.innerHTML = `Rótulo`;
+    } else tooltip.style.display='none';
+
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  // Ações
+  document.getElementById('btnOpt').onclick = () => { patio = optimizeLayout(originalPatio); rebuildFaces(); }; // [attached_file:1]
+  document.getElementById('btnOrig').onclick = () => { patio = JSON.parse(JSON.stringify(originalPatio)); rebuildFaces(); }; // [attached_file:1]
+})();
+</script>
+</body>
+</html>
